@@ -1,11 +1,17 @@
+import javafx.application.Platform;
+
+import javax.swing.*;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.function.Consumer;
-import javafx.application.Platform;
+import java.sql.*;
 
 public class Server
 {
@@ -13,11 +19,31 @@ public class Server
     Consumer<Serializable> callback;
     ArrayList<ClientThread> clients;
 
+    //Database connection
+    Connection con;
+
     Server(Consumer<Serializable> call, int port)
     {
         callback = call;
         server = new TheServer(port);
         clients = new ArrayList<ClientThread>();
+
+        try {
+            Class.forName("oracle.jdbc.driver.OracleDriver");
+            con = DriverManager.getConnection("jdbc:oracle:thin:@108.92.151.97:2204:orcl", "Paul", "joemamma");
+            /*Sample sql code
+            con.beginRequest();
+            Statement stmt = con.createStatement();
+
+            ResultSet rs = stmt.executeQuery("select * from Users");
+            while (rs.next()) {
+                System.out.println(rs.getString(1) + ": " + rs.getString(2));
+            }
+            con.endRequest();*/
+        } catch (Exception ex)
+        {
+            System.out.println(ex);
+        }
     }
 
     public void start()
@@ -90,8 +116,21 @@ public class Server
     //Shutdown all threads
     public void shutdown()
     {
-        for (ClientThread c : clients)
-            c.kill();
+        for (int i = 0; i < clients.size(); i++) {
+            try
+            {
+                String time = new Timestamp(System.currentTimeMillis()).toString();
+                con.beginRequest();
+                Statement st = con.createStatement();
+                st.executeQuery("UPDATE Logs SET LOGOUT = timestamp '" + time + "' WHERE LOGOUT is null AND USERNAME = '" + clients.get(i).name + "'");
+                con.endRequest();
+            }catch (Exception ex)
+            {
+                System.out.println(ex);
+            }
+            clients.get(i).kill();
+            i--;
+        }
         server.kill();
     }
 
@@ -175,6 +214,19 @@ public class Server
             setDaemon(true);
         }
 
+        private String bytestoHex(byte[] hash)
+        {
+            StringBuilder hexString = new StringBuilder(2 * hash.length);
+            for (int i = 0; i < hash.length; i++) {
+                String hex = Integer.toHexString(0xff & hash[i]);
+                if(hex.length() == 1) {
+                    hexString.append('0');
+                }
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        }
+
         public void run()
         {
             try
@@ -195,22 +247,78 @@ public class Server
                 messagePlayer(gg);
                 boolean n = false;
                 String n2 = "";
+                String p = "";
                 do
                 {
                     n = false;
                     GameInfo g = (GameInfo)in.readObject();
                     n2 = g.msg;
+                    p = g.pass;
                     ClientThread c = getClientWithName(n2);
                     if (c != null)
                     {
                         //Somebody already exists with this name
                         GameInfo g2 = new GameInfo(-1);
-                        g2.msg = "Client with that name already exists, choose another name.";
+                        g2.msg = "Client with that name already logged in, choose another name.";
                         messagePlayer(g2);
                         n = true;
                     }
+                    else
+                    {
+                        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                        byte[] encodedhash = digest.digest(p.getBytes(StandardCharsets.UTF_8));
+                        String hashedPW = bytestoHex(encodedhash);
+                        con.beginRequest();
+                        Statement stmt = con.createStatement();
+
+                        //System.out.println("select PASSWORD from Users where USERNAME = '" + n2 + "'");
+                        ResultSet rs = stmt.executeQuery("select PASSWORD from Users where USERNAME = '" + n2 + "'");
+                        boolean validUsername = false;
+                        while(rs.next()) {
+                            validUsername = true;
+                            String actualHash = rs.getString(1);
+                            if (!actualHash.equals(hashedPW))
+                            {
+                                n = true;
+                                GameInfo g2 = new GameInfo(-1);
+                                g2.msg = "Wrong password!";
+                                messagePlayer(g2);
+                            }
+                            else
+                            {
+                                GameInfo g2 = new GameInfo(-1);
+                                g2.msg = "Connected as user " + n2 + "!";
+                                messagePlayer(g2);
+                                String finalN = n2;
+                                Platform.runLater(()->{
+                                    try {
+                                        String time = new Timestamp(System.currentTimeMillis()).toString();
+                                        con.beginRequest();
+                                        Statement st = con.createStatement(), delSt = con.createStatement();
+                                        delSt.executeQuery("DELETE from Logs where LOGOUT is null");
+                                        String query = "INSERT into Logs values('" + finalN + "', timestamp '" + time + "', null)";
+                                        ResultSet res = st.executeQuery(query);
+                                        res.close();
+                                        delSt.close();
+                                        st.close();
+                                        con.endRequest();
+                                    }catch (Exception ex)
+                                    {
+                                        System.out.println(ex);
+                                    }
+                                });
+                            }
+                        }
+                        if (!validUsername)
+                        {
+                            GameInfo g2 = new GameInfo(-1);
+                            g2.msg = "No such user exists.";
+                            messagePlayer(g2);
+                            n = true;
+                        }
+                    }
                 }while(n);
-                //Have a name
+                con.endRequest();
                 hasName = true;
                 name = n2;
                 callback.accept(name + " has joined the lobby");
@@ -287,16 +395,54 @@ public class Server
                                     gg2.msg = "You win!  Returning to lobby in 5 seconds...";
                                     GameInfo gg3 = new GameInfo(6);
                                     gg3.msg = "You lose!  Returning to lobby in 5 seconds...";
+                                    String winnerName = "", loserName = "";
                                     if (winner == 0){
                                         gg2.msg = "Tie game!  Returning to lobby in 5 seconds...";
                                         messagePlayer(gg2);
                                         c.messagePlayer(gg2);
-                                    }else if (winner == 1){
-                                        messagePlayer(gg2);
-                                        c.messagePlayer(gg3);
-                                    }else if (winner == 2){
-                                        messagePlayer(gg3);
-                                        c.messagePlayer(gg2);
+                                    }else {
+                                        //This player won
+                                        if (winner == 1) {
+                                            messagePlayer(gg2);
+                                            c.messagePlayer(gg3);
+                                            winnerName = name;
+                                            loserName = c.name;
+                                        }
+                                        //This player lost
+                                        else if (winner == 2) {
+                                            messagePlayer(gg3);
+                                            c.messagePlayer(gg2);
+                                            loserName = name;
+                                            winnerName = c.name;
+                                        }
+                                        String finalWinnerName = winnerName;
+                                        String finalLoserName = loserName;
+                                        Platform.runLater(()->{
+                                            try {
+                                                con.beginRequest();
+                                                Statement stmt = con.createStatement(), updateSt = con.createStatement();
+
+                                                //System.out.println("select PASSWORD from Users where USERNAME = '" + n2 + "'");
+                                                ResultSet rs = stmt.executeQuery("select COUNT from Wins where WINNER = '" + finalWinnerName + "' AND LOSER ='" + finalLoserName + "'");
+                                                boolean hasEntry = false;
+                                                while (rs.next()) {
+                                                    hasEntry = true;
+                                                    int count = rs.getInt(1) + 1;
+                                                    updateSt.executeQuery("UPDATE Wins SET COUNT = " + count + " WHERE WINNER ='" + finalWinnerName + "' AND LOSER ='" + finalLoserName + "'");
+                                                }
+                                                //No entry, create it
+                                                if (!hasEntry) {
+                                                    updateSt.executeQuery("INSERT INTO Wins values('" + finalWinnerName + "', '" + finalLoserName + "', 1)");
+                                                }
+                                                rs.close();
+                                                stmt.close();
+                                                updateSt.close();
+                                                con.endRequest();
+                                            }catch (Exception ex)
+                                            {
+                                                System.out.println(ex);
+                                            }
+                                        });
                                     }
                                 }
                             }
@@ -357,6 +503,17 @@ public class Server
                         kill = true;
                         if (hasName)
                         {
+                            try
+                            {
+                                String time = new Timestamp(System.currentTimeMillis()).toString();
+                                con.beginRequest();
+                                Statement st = con.createStatement();
+                                st.executeQuery("UPDATE Logs SET LOGOUT = timestamp '" + time + "' WHERE LOGOUT is null AND USERNAME = '" + name + "'");
+                                con.endRequest();
+                            }catch (Exception ex2)
+                            {
+                                System.out.println(ex2);
+                            }
                             callback.accept(name + " left the game!");
                             GameInfo g = new GameInfo(1);
                             g.name = name;
@@ -438,6 +595,7 @@ public class Server
             try
             {
                 connection.close();
+                con.close();
             }catch (Exception ex)
             {
 

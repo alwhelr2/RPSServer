@@ -32,7 +32,7 @@ public class RPSLS extends Application
     @Override
     public void start(Stage primaryStage) throws Exception {
         // TODO Auto-generated method stub
-        primaryStage.setTitle("RPLS Server");
+        primaryStage.setTitle("RPSLS Server");
 
         portL = new Label("Port: ");
         portField = new TextField();
