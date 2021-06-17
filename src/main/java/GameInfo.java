@@ -14,7 +14,7 @@ public class GameInfo implements Serializable
     //Serverdrop indicates that the client lost connection to the server (client will send to themselves)
     //Finished sent to a client indicates that we should start the pauseTransition that will move us back to the lobby
     //Finished sent to a server indicates that we need the clientlist from the server
-    //-1 = message, 0 = startGame, 1 = leftGame, 2 = challenge, 3 = inGame, 4 = selfChallenge, 5 = serverDrop, 6 = finished, 7 = handshake, 8 = choice
+    //-1 = message, 0 = startGame, 1 = leftGame, 2 = challenge, 3 = inGame, 4 = selfChallenge, 5 = serverDrop, 6 = finished, 7 = handshake, 8 = choice, 9 = newPlayer
 
 
     public GameInfo(int t)
